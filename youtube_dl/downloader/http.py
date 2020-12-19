@@ -46,8 +46,8 @@ class HttpFD(FileDownloader):
 
         is_test = self.params.get('test', False)
         chunk_size = self._TEST_FILE_SIZE if is_test else (
-            info_dict.get('downloader_options', {}).get('http_chunk_size') or
-            self.params.get('http_chunk_size') or 0)
+            info_dict.get('downloader_options', {}).get('http_chunk_size')
+            or self.params.get('http_chunk_size') or 0)
 
         ctx.open_mode = 'wb'
         ctx.resume_len = 0
@@ -106,12 +106,19 @@ class HttpFD(FileDownloader):
                 set_range(request, range_start, range_end)
             # Establish connection
             try:
-                ctx.data = self.ydl.urlopen(request)
+                try:
+                    ctx.data = self.ydl.urlopen(request)
+                except (compat_urllib_error.URLError, ) as err:
+                    # reason may not be available, e.g. for urllib2.HTTPError on python 2.6
+                    reason = getattr(err, 'reason', None)
+                    if isinstance(reason, socket.timeout):
+                        raise RetryDownload(err)
+                    raise err
                 # When trying to resume, Content-Range HTTP header of response has to be checked
                 # to match the value of requested Range HTTP header. This is due to a webservers
                 # that don't support resuming and serve a whole file with no Content-Range
                 # set in response despite of requested Range (see
-                # https://github.com/rg3/youtube-dl/issues/6057#issuecomment-126129799)
+                # https://github.com/ytdl-org/youtube-dl/issues/6057#issuecomment-126129799)
                 if has_range:
                     content_range = ctx.data.headers.get('Content-Range')
                     if content_range:
@@ -123,11 +130,11 @@ class HttpFD(FileDownloader):
                                 content_len = int_or_none(content_range_m.group(3))
                                 accept_content_len = (
                                     # Non-chunked download
-                                    not ctx.chunk_size or
+                                    not ctx.chunk_size
                                     # Chunked download and requested piece or
                                     # its part is promised to be served
-                                    content_range_end == range_end or
-                                    content_len < range_end)
+                                    or content_range_end == range_end
+                                    or content_len < range_end)
                                 if accept_content_len:
                                     ctx.data_len = content_len
                                     return
@@ -152,8 +159,8 @@ class HttpFD(FileDownloader):
                             raise
                     else:
                         # Examine the reported length
-                        if (content_length is not None and
-                                (ctx.resume_len - 100 < int(content_length) < ctx.resume_len + 100)):
+                        if (content_length is not None
+                                and (ctx.resume_len - 100 < int(content_length) < ctx.resume_len + 100)):
                             # The file had already been fully downloaded.
                             # Explanation to the above condition: in issue #175 it was revealed that
                             # YouTube sometimes adds or removes a few bytes from the end of the file,
@@ -218,24 +225,27 @@ class HttpFD(FileDownloader):
 
             def retry(e):
                 to_stdout = ctx.tmpfilename == '-'
-                if not to_stdout:
-                    ctx.stream.close()
-                ctx.stream = None
+                if ctx.stream is not None:
+                    if not to_stdout:
+                        ctx.stream.close()
+                    ctx.stream = None
                 ctx.resume_len = byte_counter if to_stdout else os.path.getsize(encodeFilename(ctx.tmpfilename))
                 raise RetryDownload(e)
 
             while True:
                 try:
                     # Download and write
-                    data_block = ctx.data.read(block_size if not is_test else min(block_size, data_len - byte_counter))
+                    data_block = ctx.data.read(block_size if data_len is None else min(block_size, data_len - byte_counter))
                 # socket.timeout is a subclass of socket.error but may not have
                 # errno set
                 except socket.timeout as e:
                     retry(e)
                 except socket.error as e:
-                    if e.errno not in (errno.ECONNRESET, errno.ETIMEDOUT):
-                        raise
-                    retry(e)
+                    # SSLError on python 2 (inherits socket.error) may have
+                    # no errno set but this error message
+                    if e.errno in (errno.ECONNRESET, errno.ETIMEDOUT) or getattr(e, 'message', None) == 'The read operation timed out':
+                        retry(e)
+                    raise
 
                 byte_counter += len(data_block)
 
@@ -299,7 +309,7 @@ class HttpFD(FileDownloader):
                     'elapsed': now - ctx.start_time,
                 })
 
-                if is_test and byte_counter == data_len:
+                if data_len is not None and byte_counter == data_len:
                     break
 
             if not is_test and ctx.chunk_size and ctx.data_len is not None and byte_counter < ctx.data_len:

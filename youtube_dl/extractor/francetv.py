@@ -17,6 +17,7 @@ from ..utils import (
     parse_duration,
     try_get,
     url_or_none,
+    urljoin,
 )
 from .dailymotion import DailymotionIE
 
@@ -128,22 +129,42 @@ class FranceTVIE(InfoExtractor):
 
         is_live = None
 
-        formats = []
-        for video in info['videos']:
-            if video['statut'] != 'ONLINE':
+        videos = []
+
+        for video in (info.get('videos') or []):
+            if video.get('statut') != 'ONLINE':
                 continue
-            video_url = video['url']
+            if not video.get('url'):
+                continue
+            videos.append(video)
+
+        if not videos:
+            for device_type in ['desktop', 'mobile']:
+                fallback_info = self._download_json(
+                    'https://player.webservices.francetelevisions.fr/v1/videos/%s' % video_id,
+                    video_id, 'Downloading fallback %s video JSON' % device_type, query={
+                        'device_type': device_type,
+                        'browser': 'chrome',
+                    }, fatal=False)
+
+                if fallback_info and fallback_info.get('video'):
+                    videos.append(fallback_info['video'])
+
+        formats = []
+        for video in videos:
+            video_url = video.get('url')
             if not video_url:
                 continue
             if is_live is None:
                 is_live = (try_get(
-                    video, lambda x: x['plages_ouverture'][0]['direct'],
-                    bool) is True) or '/live.francetv.fr/' in video_url
-            format_id = video['format']
+                    video, lambda x: x['plages_ouverture'][0]['direct'], bool) is True
+                    or video.get('is_live') is True
+                    or '/live.francetv.fr/' in video_url)
+            format_id = video.get('format')
             ext = determine_ext(video_url)
             if ext == 'f4m':
                 if georestricted:
-                    # See https://github.com/rg3/youtube-dl/issues/3963
+                    # See https://github.com/ytdl-org/youtube-dl/issues/3963
                     # m3u8 urls work fine
                     continue
                 formats.extend(self._extract_f4m_formats(
@@ -154,6 +175,9 @@ class FranceTVIE(InfoExtractor):
                     sign(video_url, format_id), video_id, 'mp4',
                     entry_protocol='m3u8_native', m3u8_id=format_id,
                     fatal=False))
+            elif ext == 'mpd':
+                formats.extend(self._extract_mpd_formats(
+                    sign(video_url, format_id), video_id, mpd_id=format_id, fatal=False))
             elif video_url.startswith('rtmp'):
                 formats.append({
                     'url': video_url,
@@ -166,6 +190,7 @@ class FranceTVIE(InfoExtractor):
                         'url': video_url,
                         'format_id': format_id,
                     })
+
         self._sort_formats(formats)
 
         title = info['titre']
@@ -185,10 +210,10 @@ class FranceTVIE(InfoExtractor):
         return {
             'id': video_id,
             'title': self._live_title(title) if is_live else title,
-            'description': clean_html(info['synopsis']),
-            'thumbnail': compat_urlparse.urljoin('http://pluzz.francetv.fr', info['image']),
-            'duration': int_or_none(info.get('real_duration')) or parse_duration(info['duree']),
-            'timestamp': int_or_none(info['diffusion']['timestamp']),
+            'description': clean_html(info.get('synopsis')),
+            'thumbnail': urljoin('https://sivideo.webservices.francetelevisions.fr', info.get('image')),
+            'duration': int_or_none(info.get('real_duration')) or parse_duration(info.get('duree')),
+            'timestamp': int_or_none(try_get(info, lambda x: x['diffusion']['timestamp'])),
             'is_live': is_live,
             'formats': formats,
             'subtitles': subtitles,
@@ -215,7 +240,7 @@ class FranceTVSiteIE(FranceTVBaseInfoExtractor):
     _TESTS = [{
         'url': 'https://www.france.tv/france-2/13h15-le-dimanche/140921-les-mysteres-de-jesus.html',
         'info_dict': {
-            'id': '162311093',
+            'id': 'ec217ecc-0733-48cf-ac06-af1347b849d1',
             'ext': 'mp4',
             'title': '13h15, le dimanche... - Les mystères de Jésus',
             'description': 'md5:75efe8d4c0a8205e5904498ffe1e1a42',
@@ -271,7 +296,7 @@ class FranceTVSiteIE(FranceTVBaseInfoExtractor):
 
         catalogue = None
         video_id = self._search_regex(
-            r'data-main-video=(["\'])(?P<id>(?:(?!\1).)+)\1',
+            r'(?:data-main-video\s*=|videoId["\']?\s*[:=])\s*(["\'])(?P<id>(?:(?!\1).)+)\1',
             webpage, 'video id', default=None, group='id')
 
         if not video_id:
@@ -371,12 +396,13 @@ class FranceTVInfoIE(FranceTVBaseInfoExtractor):
                 self.url_result(dailymotion_url, DailymotionIE.ie_key())
                 for dailymotion_url in dailymotion_urls])
 
-        video_id, catalogue = self._search_regex(
-            (r'id-video=([^@]+@[^"]+)',
+        video_id = self._search_regex(
+            (r'player\.load[^;]+src:\s*["\']([^"\']+)',
+             r'id-video=([^@]+@[^"]+)',
              r'<a[^>]+href="(?:https?:)?//videos\.francetv\.fr/video/([^@]+@[^"]+)"'),
-            webpage, 'video id').split('@')
+            webpage, 'video id')
 
-        return self._make_url_result(video_id, catalogue)
+        return self._make_url_result(video_id)
 
 
 class FranceTVInfoSportIE(FranceTVBaseInfoExtractor):

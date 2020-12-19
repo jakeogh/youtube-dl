@@ -15,7 +15,7 @@ from ..utils import (
 class ExpressenIE(InfoExtractor):
     _VALID_URL = r'''(?x)
                     https?://
-                        (?:www\.)?expressen\.se/
+                        (?:www\.)?(?:expressen|di)\.se/
                         (?:(?:tvspelare/video|videoplayer/embed)/)?
                         tv/(?:[^/]+/)*
                         (?P<id>[^/?#&]+)
@@ -42,13 +42,16 @@ class ExpressenIE(InfoExtractor):
     }, {
         'url': 'https://www.expressen.se/videoplayer/embed/tv/ditv/ekonomistudion/experterna-har-ar-fragorna-som-avgor-valet/?embed=true&external=true&autoplay=true&startVolume=0&partnerId=di',
         'only_matching': True,
+    }, {
+        'url': 'https://www.di.se/videoplayer/embed/tv/ditv/borsmorgon/implantica-rusar-70--under-borspremiaren-hor-styrelsemedlemmen/?embed=true&external=true&autoplay=true&startVolume=0&partnerId=di',
+        'only_matching': True,
     }]
 
     @staticmethod
     def _extract_urls(webpage):
         return [
             mobj.group('url') for mobj in re.finditer(
-                r'<iframe[^>]+\bsrc=(["\'])(?P<url>(?:https?:)?//(?:www\.)?expressen\.se/(?:tvspelare/video|videoplayer/embed)/tv/.+?)\1',
+                r'<iframe[^>]+\bsrc=(["\'])(?P<url>(?:https?:)?//(?:www\.)?(?:expressen|di)\.se/(?:tvspelare/video|videoplayer/embed)/tv/.+?)\1',
                 webpage)]
 
     def _real_extract(self, url):
@@ -82,8 +85,8 @@ class ExpressenIE(InfoExtractor):
         title = info.get('titleRaw') or data['title']
         description = info.get('descriptionRaw')
         thumbnail = info.get('socialMediaImage') or data.get('image')
-        duration = int_or_none(info.get('videoTotalSecondsDuration') or
-                               data.get('totalSecondsDuration'))
+        duration = int_or_none(info.get('videoTotalSecondsDuration')
+                               or data.get('totalSecondsDuration'))
         timestamp = unified_timestamp(info.get('publishDate'))
 
         return {

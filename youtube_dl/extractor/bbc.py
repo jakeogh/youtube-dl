@@ -1,8 +1,8 @@
 # coding: utf-8
 from __future__ import unicode_literals
 
-import re
 import itertools
+import re
 
 from .common import InfoExtractor
 from ..utils import (
@@ -17,10 +17,12 @@ from ..utils import (
     parse_iso8601,
     try_get,
     unescapeHTML,
+    url_or_none,
     urlencode_postdata,
     urljoin,
 )
 from ..compat import (
+    compat_etree_Element,
     compat_HTTPError,
     compat_urlparse,
 )
@@ -38,6 +40,7 @@ class BBCCoUkIE(InfoExtractor):
                             iplayer(?:/[^/]+)?/(?:episode/|playlist/)|
                             music/(?:clips|audiovideo/popular)[/#]|
                             radio/player/|
+                            sounds/play/|
                             events/[^/]+/play/[^/]+/
                         )
                         (?P<id>%s)(?!/(?:episodes|broadcasts|clips))
@@ -68,7 +71,7 @@ class BBCCoUkIE(InfoExtractor):
             'info_dict': {
                 'id': 'b039d07m',
                 'ext': 'flv',
-                'title': 'Leonard Cohen, Kaleidoscope - BBC Radio 4',
+                'title': 'Kaleidoscope, Leonard Cohen',
                 'description': 'The Canadian poet and songwriter reflects on his musical career.',
             },
             'params': {
@@ -206,7 +209,7 @@ class BBCCoUkIE(InfoExtractor):
             },
             'skip': 'Now it\'s really geo-restricted',
         }, {
-            # compact player (https://github.com/rg3/youtube-dl/issues/8147)
+            # compact player (https://github.com/ytdl-org/youtube-dl/issues/8147)
             'url': 'http://www.bbc.co.uk/programmes/p028bfkf/player',
             'info_dict': {
                 'id': 'p028bfkj',
@@ -218,6 +221,20 @@ class BBCCoUkIE(InfoExtractor):
                 # rtmp download
                 'skip_download': True,
             },
+        }, {
+            'url': 'https://www.bbc.co.uk/sounds/play/m0007jzb',
+            'note': 'Audio',
+            'info_dict': {
+                'id': 'm0007jz9',
+                'ext': 'mp4',
+                'title': 'BBC Proms, 2019, Prom 34: West–Eastern Divan Orchestra',
+                'description': "Live BBC Proms. West–Eastern Divan Orchestra with Daniel Barenboim and Martha Argerich.",
+                'duration': 9840,
+            },
+            'params': {
+                # rtmp download
+                'skip_download': True,
+            }
         }, {
             'url': 'http://www.bbc.co.uk/iplayer/playlist/p01dvks4',
             'only_matching': True,
@@ -310,7 +327,13 @@ class BBCCoUkIE(InfoExtractor):
     def _get_subtitles(self, media, programme_id):
         subtitles = {}
         for connection in self._extract_connections(media):
-            captions = self._download_xml(connection.get('href'), programme_id, 'Downloading captions')
+            cc_url = url_or_none(connection.get('href'))
+            if not cc_url:
+                continue
+            captions = self._download_xml(
+                cc_url, programme_id, 'Downloading captions', fatal=False)
+            if not isinstance(captions, compat_etree_Element):
+                continue
             lang = captions.get('{http://www.w3.org/XML/1998/namespace}lang', 'en')
             subtitles[lang] = [
                 {
@@ -505,7 +528,7 @@ class BBCCoUkIE(InfoExtractor):
 
             def get_programme_id(item):
                 def get_from_attributes(item):
-                    for p in('identifier', 'group'):
+                    for p in ('identifier', 'group'):
                         value = item.get(p)
                         if value and re.match(r'^[pb][\da-z]{7}$', value):
                             return value
@@ -601,7 +624,7 @@ class BBCIE(BBCCoUkIE):
         'url': 'http://www.bbc.com/news/world-europe-32668511',
         'info_dict': {
             'id': 'world-europe-32668511',
-            'title': 'Russia stages massive WW2 parade despite Western boycott',
+            'title': 'Russia stages massive WW2 parade',
             'description': 'md5:00ff61976f6081841f759a08bf78cc9c',
         },
         'playlist_count': 2,
@@ -795,6 +818,15 @@ class BBCIE(BBCCoUkIE):
             'uploader': 'Radio 3',
             'uploader_id': 'bbc_radio_three',
         },
+    }, {
+        'url': 'http://www.bbc.co.uk/learningenglish/chinese/features/lingohack/ep-181227',
+        'info_dict': {
+            'id': 'p06w9tws',
+            'ext': 'mp4',
+            'title': 'md5:2fabf12a726603193a2879a055f72514',
+            'description': 'Learn English words and phrases from this story',
+        },
+        'add_ie': [BBCCoUkIE.ie_key()],
     }]
 
     @classmethod
@@ -945,6 +977,15 @@ class BBCIE(BBCCoUkIE):
         if entries:
             return self.playlist_result(entries, playlist_id, playlist_title, playlist_description)
 
+        # http://www.bbc.co.uk/learningenglish/chinese/features/lingohack/ep-181227
+        group_id = self._search_regex(
+            r'<div[^>]+\bclass=["\']video["\'][^>]+\bdata-pid=["\'](%s)' % self._ID_REGEX,
+            webpage, 'group id', default=None)
+        if group_id:
+            return self.url_result(
+                'https://www.bbc.co.uk/programmes/%s' % group_id,
+                ie=BBCCoUkIE.ie_key())
+
         # single video story (e.g. http://www.bbc.com/travel/story/20150625-sri-lankas-spicy-secret)
         programme_id = self._search_regex(
             [r'data-(?:video-player|media)-vpid="(%s)"' % self._ID_REGEX,
@@ -1051,10 +1092,26 @@ class BBCIE(BBCCoUkIE):
             self._search_regex(
                 r'(?s)bbcthreeConfig\s*=\s*({.+?})\s*;\s*<', webpage,
                 'bbcthree config', default='{}'),
-            playlist_id, transform_source=js_to_json, fatal=False)
-        if bbc3_config:
+            playlist_id, transform_source=js_to_json, fatal=False) or {}
+        payload = bbc3_config.get('payload') or {}
+        if payload:
+            clip = payload.get('currentClip') or {}
+            clip_vpid = clip.get('vpid')
+            clip_title = clip.get('title')
+            if clip_vpid and clip_title:
+                formats, subtitles = self._download_media_selector(clip_vpid)
+                self._sort_formats(formats)
+                return {
+                    'id': clip_vpid,
+                    'title': clip_title,
+                    'thumbnail': dict_get(clip, ('poster', 'imageUrl')),
+                    'description': clip.get('description'),
+                    'duration': parse_duration(clip.get('duration')),
+                    'formats': formats,
+                    'subtitles': subtitles,
+                }
             bbc3_playlist = try_get(
-                bbc3_config, lambda x: x['payload']['content']['bbcMedia']['playlist'],
+                payload, lambda x: x['content']['bbcMedia']['playlist'],
                 dict)
             if bbc3_playlist:
                 playlist_title = bbc3_playlist.get('title') or playlist_title
@@ -1076,6 +1133,39 @@ class BBCIE(BBCCoUkIE):
                     })
                 return self.playlist_result(
                     entries, playlist_id, playlist_title, playlist_description)
+
+        initial_data = self._parse_json(self._search_regex(
+            r'window\.__INITIAL_DATA__\s*=\s*({.+?});', webpage,
+            'preload state', default='{}'), playlist_id, fatal=False)
+        if initial_data:
+            def parse_media(media):
+                if not media:
+                    return
+                for item in (try_get(media, lambda x: x['media']['items'], list) or []):
+                    item_id = item.get('id')
+                    item_title = item.get('title')
+                    if not (item_id and item_title):
+                        continue
+                    formats, subtitles = self._download_media_selector(item_id)
+                    self._sort_formats(formats)
+                    entries.append({
+                        'id': item_id,
+                        'title': item_title,
+                        'thumbnail': item.get('holdingImageUrl'),
+                        'formats': formats,
+                        'subtitles': subtitles,
+                    })
+            for resp in (initial_data.get('data') or {}).values():
+                name = resp.get('name')
+                if name == 'media-experience':
+                    parse_media(try_get(resp, lambda x: x['data']['initialItem']['mediaItem'], dict))
+                elif name == 'article':
+                    for block in (try_get(resp, lambda x: x['data']['blocks'], list) or []):
+                        if block.get('type') != 'media':
+                            continue
+                        parse_media(block.get('model'))
+            return self.playlist_result(
+                entries, playlist_id, playlist_title, playlist_description)
 
         def extract_all(pattern):
             return list(filter(None, map(

@@ -150,7 +150,7 @@ class IqiyiSDKInterpreter(object):
             elif function in other_functions:
                 other_functions[function]()
             else:
-                raise ExtractorError('Unknown funcion %s' % function)
+                raise ExtractorError('Unknown function %s' % function)
 
         return sdk.target
 
@@ -383,9 +383,9 @@ class IqiyiIE(InfoExtractor):
             self._sleep(5, video_id)
 
         self._sort_formats(formats)
-        title = (get_element_by_id('widget-videotitle', webpage) or
-                 clean_html(get_element_by_attribute('class', 'mod-play-tit', webpage)) or
-                 self._html_search_regex(r'<span[^>]+data-videochanged-title="word"[^>]*>([^<]+)</span>', webpage, 'title'))
+        title = (get_element_by_id('widget-videotitle', webpage)
+                 or clean_html(get_element_by_attribute('class', 'mod-play-tit', webpage))
+                 or self._html_search_regex(r'<span[^>]+data-videochanged-title="word"[^>]*>([^<]+)</span>', webpage, 'title'))
 
         return {
             'id': video_id,
